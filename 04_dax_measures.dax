@@ -1,0 +1,77 @@
+// =====================================================================
+// Superstore Sales & Profitability - DAX measures
+// Paste into Power BI Desktop > DAX query view, then add the measures
+// to the model (see the guide). Or add them one by one via
+// Home > New measure.
+// Requires: dim_date marked as date table (FullDate), and relationships
+//   fact_sales[OrderDateKey]  -> dim_date[DateKey]  (active)
+//   fact_sales[ShipDateKey]   -> dim_date[DateKey]  (inactive)
+// =====================================================================
+
+DEFINE
+    // ---------- Core KPIs ----------
+    MEASURE fact_sales[Total Sales]      = SUM ( fact_sales[Sales] )
+    MEASURE fact_sales[Total Profit]     = SUM ( fact_sales[Profit] )
+    MEASURE fact_sales[Total Cost]       = SUM ( fact_sales[Cost] )
+    MEASURE fact_sales[Profit Margin %]  = DIVIDE ( [Total Profit], [Total Sales] )
+    MEASURE fact_sales[Total Orders]     = DISTINCTCOUNT ( fact_sales[OrderID] )
+    MEASURE fact_sales[Total Customers]  = DISTINCTCOUNT ( fact_sales[CustomerKey] )
+    MEASURE fact_sales[Units Sold]       = SUM ( fact_sales[Quantity] )
+    MEASURE fact_sales[Avg Order Value]  = DIVIDE ( [Total Sales], [Total Orders] )
+    MEASURE fact_sales[Avg Discount %]   = AVERAGE ( fact_sales[Discount] )
+
+    // ---------- Time intelligence ----------
+    MEASURE fact_sales[Sales PY]         = CALCULATE ( [Total Sales],  SAMEPERIODLASTYEAR ( dim_date[FullDate] ) )
+    MEASURE fact_sales[Profit PY]        = CALCULATE ( [Total Profit], SAMEPERIODLASTYEAR ( dim_date[FullDate] ) )
+    MEASURE fact_sales[Sales YoY %]      = DIVIDE ( [Total Sales]  - [Sales PY],  [Sales PY] )
+    MEASURE fact_sales[Profit YoY %]     = DIVIDE ( [Total Profit] - [Profit PY], [Profit PY] )
+    MEASURE fact_sales[Sales YTD]        = TOTALYTD ( [Total Sales],  dim_date[FullDate] )
+    MEASURE fact_sales[Profit YTD]       = TOTALYTD ( [Total Profit], dim_date[FullDate] )
+    MEASURE fact_sales[Running Total Sales] =
+        CALCULATE (
+            [Total Sales],
+            FILTER ( ALLSELECTED ( dim_date[FullDate] ), dim_date[FullDate] <= MAX ( dim_date[FullDate] ) )
+        )
+
+    // ---------- Profitability and discount leakage ----------
+    MEASURE fact_sales[Loss-Making Lines] = CALCULATE ( COUNTROWS ( fact_sales ), fact_sales[Profit] < 0 )
+    MEASURE fact_sales[Loss % of Lines]   = DIVIDE ( [Loss-Making Lines], COUNTROWS ( fact_sales ) )
+    MEASURE fact_sales[Loss Amount]       = CALCULATE ( [Total Profit], fact_sales[Profit] < 0 )
+    MEASURE fact_sales[Profit on Discounts Over 20%] = CALCULATE ( [Total Profit], fact_sales[Discount] > 0.2 )
+    MEASURE fact_sales[Margin Status]     = IF ( [Profit Margin %] < 0, "Loss", "Profit" )
+
+    // ---------- Shipping (uses the inactive ship-date relationship) ----------
+    MEASURE fact_sales[Sales by Ship Date] =
+        CALCULATE ( [Total Sales], USERELATIONSHIP ( fact_sales[ShipDateKey], dim_date[DateKey] ) )
+    MEASURE fact_sales[Avg Ship Days] =
+        AVERAGEX (
+            fact_sales,
+            DATEDIFF (
+                RELATED ( dim_date[FullDate] ),
+                LOOKUPVALUE ( dim_date[FullDate], dim_date[DateKey], fact_sales[ShipDateKey] ),
+                DAY
+            )
+        )
+
+// Quick check: should return Sales 2,297,200.86 / Profit 286,397.02 / Margin 12.47%
+EVALUATE
+ROW (
+    "Sales",  [Total Sales],
+    "Profit", [Total Profit],
+    "Margin", [Profit Margin %],
+    "Orders", [Total Orders]
+)
+
+// =====================================================================
+// CALCULATED COLUMN (add separately: select fact_sales > Table tools >
+// New column, then paste this one line). Used for the Discount Impact page.
+// =====================================================================
+// Discount Band =
+//     SWITCH (
+//         TRUE (),
+//         fact_sales[Discount] = 0,    "1) No discount",
+//         fact_sales[Discount] <= 0.2, "2) 1-20%",
+//         fact_sales[Discount] <= 0.4, "3) 21-40%",
+//         fact_sales[Discount] <= 0.6, "4) 41-60%",
+//         "5) Over 60%"
+//     )
